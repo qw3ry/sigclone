@@ -6,7 +6,7 @@ plugins {
   id("com.github.johnrengelman.shadow") version "5.2.0"
 }
 
-group = "se.studieren.12.thesis"
+group = "se.studieren.sigclone"
 version = "1.0-SNAPSHOT"
 
 repositories {
