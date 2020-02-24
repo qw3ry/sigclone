@@ -26,27 +26,32 @@ fun main(args: Array<String>) {
   Main().subcommands(W2vAnalysis(), CloneDetection(), W2vModel()).main(args)
 }
 
-abstract class CommonOptions(name: String? = null) : CliktCommand(name = name) {
-  protected val sourceDirectory: List<File> by argument().file(
-      exists = true,
-      fileOkay = true,
-      folderOkay = true,
-      writable = true,
-      readable = true
+abstract class CommonOptions(name: String? = null, help: String? = null)
+  : CliktCommand(name = name, help = help ?: "", printHelpOnEmptyArgs = true) {
+  protected val sourceDirectory: List<File> by argument(name = "source code", help = "The source code to analyze. Can be given as a list of files, or as list of folders.").file(
+      mustExist = true,
+      canBeFile = true,
+      canBeDir = true,
+      mustBeWritable = true,
+      mustBeReadable = true
   ).multiple(required = true)
-  protected val filterMainAndOverride by option("-f", "--filter-main-override").flag("--no-filter", default = true)
-  protected val splitIdentifier by option("-s", "--split").flag("--no-split", default = true)
-  protected val minSize by option().int().default(6)
+  protected val filterMainAndOverride by option("-f", "--filter-main-override", help = "This option controls, whether main methods, and methods marked as @Override, are filtered out prior to the clone detection").flag("--no-filter", default = true)
+  protected val splitIdentifier by option("-s", "--split", help = "This flag controls, whether identifiers are split at word boundaries.").flag("--no-split", default = true)
+  protected val minSize by option("--min-size", help = "The minimum number of lines, that a function should span to be considered.").int().default(6)
 }
 
 class Main : CliktCommand() {
   override fun run() = Unit
 }
 
-class W2vAnalysis : CommonOptions(name = "analyze") {
-  private val output by argument().file(folderOkay = false)
-  private val windowSize by option("-w", "--window-size").int().default(5)
-  private val layerSize by option("-l", "--layer-size").int().default(100)
+class W2vAnalysis : CommonOptions(name = "create-w2v", help =
+"""
+  This command creates a word2vec model that can be used by a later clone analysis.
+  For the parameters, please see also https://deeplearning4j.org/docs/latest/deeplearning4j-nlp-word2vec
+""".trimIndent()) {
+  private val output by argument(name = "model", help = "Where to save the created word2vec model").file(canBeDir = false)
+  private val windowSize by option("-w", "--window-size", help = "The window size for the word2vec training.").int().default(5)
+  private val layerSize by option("-l", "--layer-size", help = "The layer size for the word2vec training.").int().default(100)
 
   override fun run() {
     val analyzer = AnalyzingW2vRunner(System.out, filterMainAndOverride, minSize, layerSize, windowSize)
@@ -55,9 +60,12 @@ class W2vAnalysis : CommonOptions(name = "analyze") {
   }
 }
 
-class W2vModel : CliktCommand(name = "w2v-model") {
-  private val count by option("-c", "--count").int().default(10)
-  private val modelFiles by argument("-m", "--model").file(exists = true, folderOkay = false, readable = true).multiple(true)
+class W2vModel : CliktCommand(name = "analyze-w2v", help = """
+  This command helps you to analyze a word2vec model.
+  It reads words from stdin and finds the nearest words in the model.
+""".trimIndent()) {
+  private val count by option("-c", "--count", help = "Number of nearest words returned").int().default(10)
+  private val modelFiles by argument("model", help = "One or multiple models to analyze").file(mustExist = true, canBeDir = false, mustBeReadable = true).multiple(true)
   override fun run() {
     val models = modelFiles.map { WordVectorSerializer.readWord2VecModel(it) }
     while (true) {
@@ -108,12 +116,15 @@ class W2vModel : CliktCommand(name = "w2v-model") {
   }
 }
 
-class CloneDetection : CommonOptions(name = "detect") {
-  private val type by option().enum<RunnerType>().default(RunnerType.RWD)
-  private val tolerance by option("-t", "--tolerance").double().default(0.2)
-  private val model by option("-m", "--model").file(exists = true, folderOkay = false, readable = true)
-  private val verbose by option("-v", "--verbose").flag()
-  private val quiet by option("-q", "--quiet").flag()
+class CloneDetection : CommonOptions(name = "detect", help = """
+  This command runs a clone evaluation.
+  The clone pairs are printed to stdout.
+""".trimIndent()) {
+  private val type by option("--type", help = "The runner type to use").enum<RunnerType>().default(RunnerType.RWD)
+  private val tolerance by option("-t", "--tolerance", help = "The clone detection tolerance").double().default(0.2)
+  private val model by option("-m", "--model", help = "The word2vec model. If no model is given, but it is needed by the runner, the runner creates a new model").file(mustExist = true, canBeDir = false, mustBeReadable = true)
+  private val verbose by option("-v", "--verbose", help = "If enabled, the log messages are printed again, after the clones are outputted. Useful if stdout is not redirected to a file").flag()
+  private val quiet by option("-q", "--quiet", help = "If enabled, no logging messages are printed").flag()
 
   private val formatter = BigCloneEvalFormatter()
   private val output by lazy {
@@ -122,41 +133,41 @@ class CloneDetection : CommonOptions(name = "detect") {
         verbose)
 
   }
-    private val runner by lazy {
-      createRunner(type)(
-          tolerance,
-          output,
-          filterMainAndOverride,
-          minSize
-      )
-    }
+  private val runner by lazy {
+    createRunner(type)(
+        tolerance,
+        output,
+        filterMainAndOverride,
+        minSize
+    )
+  }
 
 
-    override fun run() {
-      try {
-        output.appendValue("Source dir", sourceDirectory.map { it.absolutePath })
-        output.appendValue("Tolerance", tolerance)
-        output.println()
-        output.flush()
+  override fun run() {
+    try {
+      output.appendValue("Source dir", sourceDirectory.map { it.absolutePath })
+      output.appendValue("Tolerance", tolerance)
+      output.println()
+      output.flush()
 
-        model?.let {
-          output.appendTimedInformation("Loading model") {
-            runner.loadModel(it)
-          }
+      model?.let {
+        output.appendTimedInformation("Loading model") {
+          runner.loadModel(it)
         }
-
-        output.appendTimedInformation("Parsing") { runner.parse(sourceDirectory, splitIdentifier) }
-        System.gc()
-        output.appendTimedInformation("setFunctions") { runner.setFunctions() }
-        output.appendTimedInformation("evaluate") { runner.evaluate(formatter) }
-
-      } finally {
-        System.out.flush()
-        Thread.sleep(0)
-        output.printAgain()
       }
+
+      output.appendTimedInformation("Parsing") { runner.parse(sourceDirectory, splitIdentifier) }
+      System.gc()
+      output.appendTimedInformation("setFunctions") { runner.setFunctions() }
+      output.appendTimedInformation("evaluate") { runner.evaluate(formatter) }
+
+    } finally {
+      System.out.flush()
+      Thread.sleep(0)
+      output.printAgain()
     }
   }
+}
 
 fun <T> PrintStream.appendTimedInformation(name: String, fn: () -> T): T {
   val start = System.nanoTime()

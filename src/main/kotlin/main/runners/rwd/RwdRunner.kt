@@ -21,7 +21,6 @@ class RwdRunner(private val tolerance: Double,
 
   override fun getNeighbors(signature: Signature): Collection<Signature> {
     val hashed = signatures[signature] ?: HashedSignature(signature)
-    val size = hashed.size()
     try {
       lock.read {
         return signatures.values.stream()
